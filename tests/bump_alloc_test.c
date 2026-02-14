@@ -1,8 +1,9 @@
 #define EASY_MEMORY_IMPLEMENTATION
+#define EM_NO_ATTRIBUTES
 #include "easy_memory.h"
 #include "test_utils.h"
 
-void test_bump_creation() {
+static void test_bump_creation(void) {
     TEST_CASE("Bump Allocator Creation");
 
     TEST_PHASE("Create Bump Allocator within EM");
@@ -16,7 +17,7 @@ void test_bump_creation() {
     #endif
 
     size_t bump_size = 256;
-    Bump *bump = em_create_bump(em, bump_size);
+    Bump *bump = em_bump_create(em, bump_size);
     ASSERT(bump != NULL, "Bump allocator should be created successfully within the EM");
     #ifdef DEBUG
     print_em(em);
@@ -33,23 +34,23 @@ void test_bump_creation() {
     print_em(em);
     #endif
 
-    bump = em_create_bump(em, 0);
+    bump = em_bump_create(em, 0);
     ASSERT(bump == NULL, "Bump allocator creation with zero size should fail");
     if (bump) em_bump_destroy(bump);
 
-    bump = em_create_bump(em, 10);
+    bump = em_bump_create(em, 10);
     ASSERT(bump == NULL, "Bump creation with too small positive size should fail");
     if (bump) em_bump_destroy(bump);
 
-    bump = em_create_bump(NULL, 100);
+    bump = em_bump_create(NULL, 100);
     ASSERT(bump == NULL, "Bump allocator creation with NULL EM should fail");
     if (bump) em_bump_destroy(bump);
 
-    bump = em_create_bump(em, 2000); // Larger than em size
+    bump = em_bump_create(em, 2000); // Larger than em size
     ASSERT(bump == NULL, "Bump allocator creation with size larger than EM should fail");
     if (bump) em_bump_destroy(bump);
 
-    bump = em_create_bump(em, em_size - sizeof(EM) - sizeof(Block));
+    bump = em_bump_create(em, em_size - sizeof(EM) - sizeof(Block));
     ASSERT(bump != NULL, "Bump allocator with size of all EM should be created successfully");
 
     em_bump_destroy(bump);
@@ -63,7 +64,7 @@ void test_bump_creation() {
     em_destroy(em);
 }
 
-void test_bump_allocation() {
+static void test_bump_allocation(void) {
     TEST_CASE("Bump Allocator Allocation");
 
     size_t em_size = 2048;
@@ -71,7 +72,7 @@ void test_bump_allocation() {
     ASSERT(em != NULL, "EM should be created successfully");
 
     size_t bump_size = 512;
-    Bump *bump = em_create_bump(em, bump_size);
+    Bump *bump = em_bump_create(em, bump_size);
     ASSERT(bump != NULL, "Bump allocator should be created successfully within the EM");
 
     TEST_PHASE("Allocate memory from Bump Allocator");
@@ -121,9 +122,9 @@ void test_bump_allocation() {
     ASSERT(ptr7 == NULL, "Aligned allocation with zero size should fail");
 
     size_t alloc_size8 = 100;
-    size_t alignment8 = -1;
+    size_t alignment8 = (size_t)-1;
     void *ptr8 = em_bump_alloc_aligned(bump, alloc_size8, alignment8);
-    ASSERT(ptr8 == NULL, "Aligned allocation with negative alignment should fail");
+    ASSERT(ptr8 == NULL, "Aligned allocation with over the top alignment should fail");
 
     size_t alloc_size9 = bump_size;
     size_t alignment9 = 16;
@@ -140,15 +141,15 @@ void test_bump_allocation() {
 }
 
 #define NUM_ALLOCS 100
-void test_bump_hard_usage() {
+static void test_bump_hard_usage(void) {
     TEST_PHASE("Bump Integrity / Hard Usage");
     EM *em = em_create(5000);
-    Bump *bump = em_create_bump(em, 4096);
+    Bump *bump = em_bump_create(em, 4096);
     void *ptrs[NUM_ALLOCS];
     size_t sizes[NUM_ALLOCS];
     
     for(int i=0; i<NUM_ALLOCS; i++) {
-        sizes[i] = 10 + (i % 20);
+        sizes[i] = (size_t)(10 + (i % 20));
         ptrs[i] = em_bump_alloc(bump, sizes[i]);
         
         ASSERT_QUIET(ptrs[i] != NULL, "Stress test allocation");
@@ -165,9 +166,9 @@ void test_bump_hard_usage() {
     em_destroy(em);
 }
 
-#define BLOCK_FROM_DATA(ptr) ((Block *)((char *)(ptr) - sizeof(Block)))
+#define BLOCK_FROM_DATA(ptr) ((Block *)((uintptr_t)(ptr) - sizeof(Block)))
 
-void test_bump_trim(void) {
+static void test_bump_trim(void) {
     TEST_CASE("Bump Trim Scenarios");
 
     // ---------------------------------------------------------
@@ -179,7 +180,7 @@ void test_bump_trim(void) {
     TEST_PHASE("2. Trim when not enough space (No-op)");
     {
         EM *em = em_create(4096);
-        Bump *bump = em_create_bump(em, 100); 
+        Bump *bump = em_bump_create(em, 100); 
         printf("capacity: %zu\n", bump_get_capacity(bump));
 
         em_bump_alloc(bump, 90);
@@ -197,7 +198,7 @@ void test_bump_trim(void) {
     TEST_PHASE("3. Trim with plenty of space (Tail Merge Scenario)");
     {
         EM *em = em_create(2048);
-        Bump *bump = em_create_bump(em, 1024);
+        Bump *bump = em_bump_create(em, 1024);
         #ifdef DEBUG
         print_em(bump_get_em(bump));
         print_fancy(bump_get_em(bump), 101);
@@ -229,7 +230,7 @@ void test_bump_trim(void) {
     {
         EM *em = em_create(2048);
 
-        Bump *bump = em_create_bump(em, 64);
+        Bump *bump = em_bump_create(em, 64);
         
         size_t alloc_size = 64 - sizeof(Block) - EM_DEFAULT_ALIGNMENT;
         em_bump_alloc(bump, alloc_size);
@@ -252,7 +253,7 @@ void test_bump_trim(void) {
         EM *em = em_create(2048);
         
         // [Bump (1024)] -> [Block C (Occupied)]
-        Bump *bump = em_create_bump(em, 1024);
+        Bump *bump = em_bump_create(em, 1024);
         void *data_c = em_alloc(em, 64);
         Block *block_c = BLOCK_FROM_DATA(data_c);
         
@@ -281,7 +282,7 @@ void test_bump_trim(void) {
         EM *em = em_create(2048);
         
         // [Bump (1024)] -> [Block B (Free)] -> [Block C (Occupied)]
-        Bump *bump = em_create_bump(em, 1024);
+        Bump *bump = em_bump_create(em, 1024);
         void *data_b = em_alloc(em, 256);
         void *data_c = em_alloc(em, 64);
         
@@ -310,7 +311,7 @@ void test_bump_trim(void) {
     TEST_PHASE("7. Trim when space is large (Offset Alignment check)");
     {
         EM *em = em_create(2048);
-        Bump *bump = em_create_bump(em, 100);
+        Bump *bump = em_bump_create(em, 100);
         
         em_bump_alloc(bump, 1);
         
@@ -327,6 +328,69 @@ void test_bump_trim(void) {
     }
 }
 
+static void test_scratch_bump_lifecycle(void) {
+    TEST_PHASE("Scratch Bump Lifecycle & Reset");
+
+    EM *em = em_create(1024);
+    ASSERT(em != NULL, "Parent EM creation failed");
+    size_t initial_free_space = free_size_in_tail(em);
+
+    #ifdef DEBUG
+    print_fancy(em, 60);
+    #endif
+
+    TEST_CASE("Create Scratch Bump Allocator");
+    size_t bump_size = 256;
+    Bump *bump = em_bump_create_scratch(em, bump_size);
+    
+    ASSERT(bump != NULL, "Bump creation failed");
+    ASSERT(em_get_has_scratch(em) == true, "EM should be marked as having scratch");
+    ASSERT(free_size_in_tail(em) < initial_free_space, "Parent tail should shrink");
+
+    size_t initial_offset = bump_get_offset(bump);
+    ASSERT(initial_offset == sizeof(Bump), "Initial offset should be sizeof(Bump)");
+
+    #ifdef DEBUG
+    print_fancy(em, 60);
+    #endif
+
+    TEST_CASE("Bump Allocations");
+    
+    void *ptr1 = em_bump_alloc(bump, 32);
+    ASSERT(ptr1 != NULL, "First allocation failed");
+    ASSERT(bump_get_offset(bump) == initial_offset + 32, "Offset should increase exactly by 32");
+
+    void *ptr2 = em_bump_alloc(bump, 64);
+    ASSERT(ptr2 != NULL, "Second allocation failed");
+    ASSERT(bump_get_offset(bump) == initial_offset + 32 + 64, "Offset should increase exactly by 64");
+
+    ASSERT((char*)ptr2 == (char*)ptr1 + 32, "Allocations should be physically adjacent");
+
+    TEST_CASE("Bump Reset");
+    em_bump_reset(bump);
+    
+    ASSERT(bump_get_offset(bump) == sizeof(Bump), "Offset should be reset to initial state");
+
+    TEST_CASE("Allocation after Reset");
+    
+    void *ptr3 = em_bump_alloc(bump, 32);
+    ASSERT(ptr3 != NULL, "Allocation after reset failed");
+    
+    ASSERT(ptr3 == ptr1, "Memory should be reused (same address as ptr1)");
+    
+    TEST_CASE("Destroy Scratch Bump");
+    em_bump_destroy(bump);
+
+    ASSERT(em_get_has_scratch(em) == false, "Scratch flag should be cleared");
+    ASSERT(free_size_in_tail(em) == initial_free_space, "Parent free space should be fully restored");
+
+    #ifdef DEBUG
+    print_fancy(em, 60);
+    #endif
+
+    em_destroy(em);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0); 
 
@@ -334,6 +398,7 @@ int main(void) {
     test_bump_allocation();
     test_bump_hard_usage();
     test_bump_trim();
+    test_scratch_bump_lifecycle();
 
     // Print test summary
     print_test_summary();

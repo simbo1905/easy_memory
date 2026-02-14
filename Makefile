@@ -1,11 +1,58 @@
 # Makefile for compiling and running easy_memory allocator tests
 
+
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+
+ASAN_OPTS = allocator_may_return_null=1:detect_stack_use_after_return=1
+SAN_FLAGS = -fsanitize=address,undefined
+
+ASAN_OPTS = allocator_may_return_null=1:detect_stack_use_after_return=1
+LSAN_RUN_FIX = 
+
+ifeq ($(UNAME_S), Linux)
+    ifeq ($(UNAME_M), x86_64)
+        SAN_FLAGS += -fsanitize=leak
+        ASAN_OPTS := $(ASAN_OPTS):detect_leaks=1
+    else
+        LSAN_RUN_FIX = ASAN_OPTIONS="$(ASAN_OPTS):detect_leaks=0" LSAN_OPTIONS="detect_leaks=0"
+    endif
+endif
+
+ifneq (,$(filter MINGW% MSYS%,$(UNAME_S)))
+    SAN_FLAGS = 
+endif
+
 CC ?= clang
 STD_C ?= c99
-CFLAGS = -Wall -Wextra -std=$(STD_C) -g -I.
+BASE_CFLAGS = -Werror -Wall -Wextra \
+	     -Wshadow \
+		 -Wconversion -Wsign-conversion \
+		 -Wundef \
+		 -Wstrict-aliasing=2 \
+		 -Wpointer-arith \
+		 -Wdouble-promotion \
+		 -Wcast-align \
+		 -Wcast-qual \
+		 -Wmissing-declarations \
+		 -Wmissing-prototypes \
+		 -Wstrict-prototypes \
+		 -Wpadded \
+		 -Wint-to-pointer-cast \
+		 -Wpointer-to-int-cast \
+		 -W -std=$(STD_C) \
+		 -g3 \
+		 -fno-omit-frame-pointer \
+		 -fno-sanitize-recover=all \
+		 -I.
+CFLAGS = $(BASE_CFLAGS) $(EXTRA_CFLAGS)
 DEBUG_FLAGS = -DDEBUG # Debug flag
 COV_FLAGS = -O0 -fprofile-arcs -ftest-coverage # Coverage flags
 LDFLAGS_COV = -lgcov # Linker flag for coverage
+
+export UBSAN_OPTIONS=halt_on_error=0:exitcode=1:print_stacktrace=1
+export ASAN_OPTIONS=$(ASAN_OPTS)
+export LSAN_OPTIONS=detect_leaks=0
 
 TEST_DIR = tests
 TEST_SRCS = $(wildcard $(TEST_DIR)/*.c)
@@ -25,15 +72,14 @@ all: clean list
 
 # Compilation of each test without debug information
 $(TEST_DIR)/%_silent: $(TEST_DIR)/%.c easy_memory.h $(TEST_DIR)/test_utils.h
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) $(CFLAGS) $(SAN_FLAGS) $< -o $@
 
 # Compilation of each test with debug information
 $(TEST_DIR)/%_debug: $(TEST_DIR)/%.c easy_memory.h $(TEST_DIR)/test_utils.h
-	$(CC) $(CFLAGS) $(DEBUG_FLAGS) $< -o $@
-
+	$(CC) $(CFLAGS) $(DEBUG_FLAGS) $(SAN_FLAGS) $< -o $@
 # Fallback test to ensure generic min_exponent_of implementation works
 test_fallback:
-	$(CC) $(CFLAGS) -DEM_FORCE_GENERIC tests/validation_test.c -o test_fallback
+	$(CC) $(CFLAGS) $(SAN_FLAGS) -DEM_FORCE_GENERIC tests/validation_test.c -o test_fallback
 	./test_fallback
 
 # --- Coverage Build Steps ---
@@ -69,11 +115,12 @@ build_debug: $(TEST_SRCS:%.c=%_debug)
 build_coverage: $(TEST_COV_BINS)
 
 # Memory leak check using valgrind
-valgrind: build_silent
+valgrind: clean
 	@printf "Running valgrind memory check on all tests...\n"
+	@$(MAKE) build_silent SAN_FLAGS="" CFLAGS="$(CFLAGS) -D__valgrind__"
 	@for test in $(TEST_SRCS:%.c=%_silent) ; do \
 		printf "\n--- Checking $$test ---\n" ; \
-		valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./$$test ; \
+		valgrind --error-exitcode=1 --leak-check=full --show-leak-kinds=all --track-origins=yes ./$$test ; \
 	done
 	@printf "\nAll memory checks completed.\n"
 
@@ -82,7 +129,7 @@ tests: build_silent
 	@printf "Running all tests (normal mode)...\n"
 	@for test in $(TEST_SRCS:%.c=%_silent) ; do \
 		printf "\n--- Running $$test ---\n" ; \
-		./$$test ; \
+		$(LSAN_RUN_FIX) ./$$test ; \
 		if [ $$? -ne 0 ]; then \
 			printf "\nTest $$test FAILED with exit code $$?\n"; \
 			exit_code=1; \
@@ -100,7 +147,7 @@ tests_full: build_debug
 	@printf "Running all tests (debug mode)...\n"
 	@for test in $(TEST_SRCS:%.c=%_debug) ; do \
 		printf "\n--- Running $$test ---\n" ; \
-		./$$test ; \
+		$(LSAN_RUN_FIX) ./$$test ; \
 		if [ $$? -ne 0 ]; then \
 			printf "\nTest $$test FAILED with exit code $$?\n"; \
 			exit_code=1; \

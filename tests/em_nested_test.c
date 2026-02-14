@@ -1,8 +1,9 @@
 #define EASY_MEMORY_IMPLEMENTATION
+#define EM_NO_ATTRIBUTES
 #include "easy_memory.h"
 #include "test_utils.h"
 
-void test_nested_creation(void) {
+static void test_nested_creation(void) {
     TEST_PHASE("Nested EM Creation");
 
     TEST_CASE("Create Parent EM");
@@ -24,6 +25,11 @@ void test_nested_creation(void) {
            ((char *)nested_em + nested_em_size <= (char *)parent_em + parent_em_size),
            "Nested EM memory should be within parent EM bounds");
     ASSERT(em_get_capacity(nested_em) == nested_em_size, "Nested EM capacity should match requested size");
+
+    #ifdef DEBUG
+    print_em(nested_em);
+    print_fancy(nested_em, 100);
+    #endif
 
     #ifdef DEBUG
     print_em(parent_em);
@@ -64,13 +70,9 @@ void test_nested_creation(void) {
     ASSERT(invalid_nested2 == NULL, "Creating nested EM with zero size should fail");
     ASSERT(free_size_in_tail(parent_em) == parent_em_size_in_tail, "Parent EM free size should remain unchanged after failed nested EM creation");
 
-    EM *invalid_nested3 = em_create_nested(parent_em, -100);
-    ASSERT(invalid_nested3 == NULL, "Creating nested EM with negative size should fail");
+    EM *invalid_nested3 = em_create_nested(parent_em, (size_t)-100);
+    ASSERT(invalid_nested3 == NULL, "Creating nested EM with negative/too large size should fail");
     ASSERT(free_size_in_tail(parent_em) == parent_em_size_in_tail, "Parent EM free size should remain unchanged after failed nested EM creation");
-
-    TEST_CASE("Free Parent EM");
-    em_destroy(parent_em);
-    ASSERT(true, "Parent EM should be freed successfully");
 
     TEST_CASE("Free NULL Nested EM");
     em_destroy(NULL); // Should not crash
@@ -79,6 +81,10 @@ void test_nested_creation(void) {
     TEST_CASE("Free Already Freed Nested EM");
     em_destroy(nested_em); // Should not crash
     ASSERT(true, "Freeing already freed nested EM should not crash");
+
+    TEST_CASE("Free Parent EM");
+    em_destroy(parent_em);
+    ASSERT(true, "Parent EM should be freed successfully");
     
     TEST_CASE("Nested EM creation in too small Parent EM");
     size_t small_parent_size = sizeof(EM) + sizeof(Block) + EM_MIN_BUFFER_SIZE + 10; // Just above minimum
@@ -93,7 +99,7 @@ void test_nested_creation(void) {
     em_destroy(small_parent);
 }
 
-void test_nested_aligned_creation(void) {
+static void test_nested_aligned_creation(void) {
     TEST_PHASE("Nested EM Aligned Creation");
 
     TEST_CASE("Create Parent EM with specific alignment");
@@ -124,7 +130,7 @@ void test_nested_aligned_creation(void) {
     ASSERT(true, "Parent EM should be freed successfully");
 }
 
-void test_nested_freeing(void) {
+static void test_nested_freeing(void) {
     TEST_PHASE("Nested EM Freeing");
 
     TEST_CASE("Freeing Nested EM through Parent EM");

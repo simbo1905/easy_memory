@@ -38,6 +38,10 @@
 ## Key Features
 
 *   **Adaptive Performance:** Optimized for real-world usage patterns. Sequential allocations and LIFO deallocations (stack-like behavior) are detected and handled in **O(1)** time via the tail block. Complex, mixed-order patterns gracefully fallback to the efficient **O(log n)** tree search.
+*   **Compiler Agnostic & Optimization Resilient:** Verified to work correctly across all optimization levels:
+    *   **GCC/Clang:** `-O1` through `-O3`, `-Os`, and `-Oz`.
+    *   **MSVC:** `/O1`, `/O2`, and `/Ox`.
+    *   Strict compliance with **Strict Aliasing** rules ensures that aggressive compiler optimizations never break memory logic.
 *   **Triple-Key LLRB Tree:** Free blocks are sorted by **Size**, **Alignment Quality** (CTZ), and **Address**. This reduces fragmentation by prioritizing blocks that *naturally* satisfy alignment requirements before splitting new memory.
 *   **Flexible Alignment:** Supports per-allocation alignment requests (powers of two, up to **512 bytes**). Ideal for SIMD vectors and cache-line aligned buffers.
 *   **Low Overhead:** Metadata consumes only **4 machine words** per block (16 bytes on 32-bit, 32 bytes on 64-bit).
@@ -46,6 +50,7 @@
     *   **Bump:** O(1) linear allocator (Available).
     *   *Stack / Slab:* (Coming soon).
 *   **Scoped Memory:** Supports `em_create_nested` for hierarchical memory management. Freeing a parent scope instantly invalidates all children with O(1) complexity.
+*   **Tail-End Scratchpad:** Instantly reserves a block at the highest memory address (**O(1)**). Ideal for temporary workspaces to prevent fragmentation of the main heap. Fully integrated with standard `em_free`.
 *   **Concurrency Model:** Intentionally lock-free and single-threaded to avoid mutex overhead. Designed for **Thread-Local Storage (TLS)** patterns (one `EM` instance per thread).
 *   **Safety First:**
     *   **XOR-Magic:** Headers are protected by address-dependent magic numbers to detect buffer underflows.
@@ -59,6 +64,22 @@
     *   **Self-Documenting:** The codebase features encyclopedic comments explaining the *physics* and *rationale* behind every architectural decision.
     *   **Visual Debugging:** Optional `print_fancy` function provides detailed, colorized visualizations of the memory layout.
 
+## Rigorous Validation
+
+The system is subjected to exhaustive verification across diverse environments and configurations:
+
+*   **Sanitizer Suite:** Verified with **ASan** (Address), **UBSan** (Undefined Behavior), and **LSan** (Leak) across multiple architectures to ensure memory integrity and zero leaks.
+*   **Valgrind Memcheck:** **0 errors from 0 contexts**. Clean diagnostic logs ensure that library internals do not interfere with application-level debugging.
+*   **Optimization Resilient:** Proven stability across aggressive compiler optimization levels:
+    *   **GCC/Clang:** `-O1`, `-O2`, `-O3`, `-Os`, and `-Oz`.
+    *   **MSVC:** `/O1`, `/O2`, and `/Ox`.
+    *   Full compliance with **Strict Aliasing** rules guaranteed.
+*   **Pedantic Compilation:** Strictly enforced "Warnings-as-Errors" policy (`-Werror`) using an extensive flag set:
+    *   **Safety & Alignment:** `-Wshadow`, `-Wconversion`, `-Wundef`, `-Wstrict-aliasing=2`, `-Wcast-align`, `-Wpadded`.
+    *   **Portability:** `-Wint-to-pointer-cast`, `-Wpointer-to-int-cast`, `-Wdouble-promotion`, `-Wpointer-arith`.
+    *   **Code Integrity:** `-Wmissing-prototypes`, `-Wstrict-prototypes`, `-Wmissing-declarations`.
+*   **Static Analysis:** Continuous monitoring via **MSVC Static Analysis** (x64/x86), **Clang-Tidy**, and **CodeFactor** (Grade A+).
+*   **Platform Coverage:** Verified compatibility with **Windows (MSVC & MinGW)**, **Linux**, and **macOS**.
 
 ## Architecture
 
@@ -93,11 +114,16 @@ The backbone of the system. It handles the heavy lifting of block splitting, mer
 *   **Adaptive Strategy:** It doesn't blindly search the tree. If you allocate sequentially, it acts as a fast O(1) bump allocator using the tail block. If you free in LIFO order (stack-like), it merges instantaneously. It only falls back to the O(log n) Tree Search when memory becomes fragmented.
 *   **Triple-Key Tree:** When searching for gaps, it finds the *best* block not just by size, but by alignment quality, preserving large contiguous chunks.
 
-### 2. Scratchpad (Lifecycle Isolation) (Planned)
+### 2. Scratchpad (Lifecycle Isolation)
 A mechanism to allocate a **single dedicated block** at the very end of the memory pool (highest address).
-*   **Purpose:** Acts as an anchor point for temporary memory contexts. By placing a temporary sub-allocator (like `Bump` or `Nested Arena`) at the extreme end of memory, you maximize the contiguous space available for the main heap.
-*   **Universal API:** Supports raw memory (`em_alloc_scratch`) or sub-allocators (`em_create_bump_scratch`).
-*   **Symmetrical Lifecycle:** No special deallocation functions required. Resources allocated via scratchpad are freed using their standard counterparts (e.g., `em_create_bump_scratch` → `em_bump_destroy`, `em_alloc_scratch` → `em_free`).
+
+*   **Purpose:** Acts as an anchor point for temporary memory contexts. By placing a temporary sub-allocator (like `Bump` or `Nested Scope`) at the extreme end of memory, you maximize the contiguous space available for the main heap.
+*   **Strict O(1) Performance:** Allocation simply reserves the tail space, and deallocation restores the previous state. No tree searches involved.
+*   **Unified Lifecycle:** **No special deallocation functions required.** The system automatically detects scratch blocks within the standard `em_free()` or `em_destroy()` calls.
+    *   Raw Memory: `em_alloc_scratch` → `em_free`
+    *   Scratch EM: `em_create_scratch` → `em_destroy`
+    *   Bump Allocator: `em_bump_create_scratch` → `em_bump_destroy`
+*   **Constraint:** Only one scratch allocation is active at a time per `EM` instance.
 
 ### 3. Sub-Allocators
 Specialized tools for specific allocation patterns. They are created *inside* a parent Core/Arena with zero overhead.
@@ -118,6 +144,13 @@ Once memory is allocated from the system, its address will **never** change duri
 
 ### Principle 2: Memory is Local (Performance by Default)
 The system allocates memory sequentially from large, contiguous chunks. This dramatically improves cache performance compared to standard `malloc`, which can scatter allocations across the heap.
+
+### Principle 3: Concurrency is Isolated (Lock-Free)
+Standard allocators often use global locks to protect the heap, causing thread contention and context switching overhead. `easy_memory` contains **no internal mutexes or atomics**.
+
+*   **The Model:** The library is designed for **Thread-Local Allocation** patterns. Each thread should own its own `EM` instance (or a dedicated nested scope).
+*   **The Benefit:** Zero synchronization overhead. Allocation speed remains deterministic and blazing fast regardless of the number of active threads.
+*   **Safety Note:** If multiple threads must share a single *parent* arena to create nested scopes, access to that parent must be externally synchronized. Once created, the nested arena is independent.
 
 ## Usage
 
@@ -152,13 +185,13 @@ Basic allocation, zero-initialization, and fast resetting.
 EM *em = em_create(1024 * 1024);
 
 // Standard allocation
-int *data = (int *)em_alloc(em, sizeof(int) * 100);
+MyObject *obj = (MyObject *)em_alloc(em, sizeof(MyObject))
 
 // Zero-initialized allocation (like calloc)
 Point *pts = (Point *)em_calloc(em, 10, sizeof(Point));
 
 // Free individual block
-em_free(data);
+em_free(obj);
 
 // Reset the entire context in O(1)
 // Marks all memory as free without releasing the underlying buffer
@@ -200,7 +233,7 @@ For high-speed temporary objects. Includes `trim` to return unused memory to the
 ```c
 void load_level_assets(EM *main_em) {
     // Reserve a large chunk (1MB) for the bump allocator
-    Bump *bump = em_create_bump(main_em, 1024 * 1024);
+    Bump *bump = em_bump_create(main_em, 1024 * 1024);
 
     // ... load unknown amount of assets ...
     for (int i = 0; i < asset_count; ++i) {
@@ -230,15 +263,80 @@ void main() {
 ```
 
 ## Configuration
-Define these macros **before** including the header to customize behavior:
+
+Customize the library's behavior by defining macros **before** including `easy_memory.h`.
+
+### Runtime Safety Policies (`EM_SAFETY_POLICY`)
+
+Controls the balance between absolute performance and runtime resilience.
+
+| Policy | Mode | Description | Recommended For |
+| :---: | :--- | :--- | :--- |
+| **0** | **CONTRACT** | **Design-by-Contract.** All checks are delegated to `EM_ASSERT`. Misuse leads to immediate abort (Debug) or UB (Release). | Performance-critical / Hardened Dev |
+| **1** | **DEFENSIVE** | **Fault-Tolerance (Default).** Performs robust 'if' checks. Gracefully returns `NULL` or exits on API misuse. | Production / General Purpose |
+
+> **Note:** The final behavior of **CONTRACT** mode is determined by your [Assertion Strategy](#assertion-strategy).
+
+### Assertion Strategy
+
+Determines how the library handles internal invariant violations.
+
+| Macro | Effect on Failure | Usage |
+| :--- | :--- | :--- |
+| **(Default)** | No-op | Assertions are compiled out. Safe for release. |
+| `DEBUG` | Calls `assert()` | Standard C behavior. Aborts with file/line information. |
+| `EM_ASSERT_STAYS` | Calls `assert()` | **Forces assertions to remain active** even in Release builds. |
+| `EM_ASSERT_PANIC` | Calls `abort()` | Hardened release. Prevents exploitability on heap corruption without leaking debug info. |
+| `EM_ASSERT_OPTIMIZE`| `__builtin_unreachable()` | **DANGER**. Uses assertions as compiler optimization hints. UB if condition is false. |
+| `EM_ASSERT(cond)` | **Custom** | Define this macro to implement custom error handling (e.g., logging, infinite loop, hardware reset). Overrides all other assertion flags. |
+
+### Memory Poisoning
+
+Helps detect use-after-free and uninitialized memory usage.
+
+| Macro | Description |
+| :--- | :--- |
+| **(Default)** | Disabled in Release, Enabled in `DEBUG`. |
+| `EM_POISONING` | Force **ENABLE** poisoning (even in Release). Fills freed memory with `EM_POISON_BYTE`. |
+| `EM_NO_POISONING` | Force **DISABLE** poisoning (even in `DEBUG`). Useful for performance profiling in debug builds. |
+| `EM_POISON_BYTE` | The byte value used for poisoning (Default: `0xDD`). |
+
+### System & Linkage
+
+| Macro | Description |
+| :--- | :--- |
+| `EASY_MEMORY_IMPLEMENTATION` | **Required.** Expands the implementation in the current translation unit. |
+| `EM_NO_MALLOC` | Disables `stdlib.h` dependency. Removes heap-based `em_create`, leaving only `em_create_static`. Essential for **Bare Metal**. |
+| `EM_STATIC` | Declares all functions as `static`, limiting visibility to the current translation unit. |
+| `EM_RESTRICT` | Manually define the `restrict` keyword if your compiler does not support auto-detection. |
+| `EM_NO_ATTRIBUTES` | Force-disables all compiler-specific attributes (`malloc`, `alloc_size`). **Note:** This is automatically enabled when both `EASY_MEMORY_IMPLEMENTATION` and `EM_STATIC` are defined to prevent pointer provenance issues during inlining. |
+
+### Fine-Tuning
 
 | Macro | Default | Description |
 | :--- | :--- | :--- |
-| **`EM_NO_MALLOC`** | *Unset* | Disables `stdlib.h` dependencies. Essential for bare-metal. |
-| **`EM_POISONING`** | *Auto* | Fills freed memory with `0xDD` in DEBUG builds. |
-| **`EM_MIN_BUFFER_SIZE`** | `16` | Minimum size of a free block split. |
-| **`EM_DEFAULT_ALIGNMENT`** | `16` | Minimum allocation alignment (must be power of two). |
+| `EM_DEFAULT_ALIGNMENT` | `16` | Baseline alignment for allocations (must be a power of two). |
+| `EM_MIN_BUFFER_SIZE` | `16` | Minimum usable size of a split block to prevent micro-fragmentation. |
+| `EM_MAGIC` | `0xDEADBEEF..` | Magic number used for block validation. Can be customized for uniqueness. |
 
+## Limitations & Roadmap
+
+### ⚠️ Current Limitation: Stack Usage (Recursive Algorithms)
+The current implementation of the LLRB tree (insertion, deletion, and balancing) relies on **recursion**. 
+
+*   **Impact:** While efficient and readable, deep recursion may risk a **Stack Overflow** on severely constrained embedded platforms (e.g., AVR, Cortex-M0 with tiny stacks) if memory becomes highly fragmented, leading to a deep tree structure.
+*   **Mitigation:** On standard desktop/server environments or embedded systems with reasonable stack sizes, this is rarely an issue.
+*   **Call for Contribution:** Switching the LLRB logic to an **iterative (loop-based)** implementation is a high-priority goal to guarantee fixed stack usage. If you enjoy algorithmic challenges and non-recursive tree traversals, **Pull Requests are highly welcome!**
+
+### Upcoming Features
+The following features are planned for future releases, prioritized by architectural importance:
+
+- [ ] **New Sub-Allocators:**
+    - **`Stack` Allocator:** A strict LIFO (Last-In-First-Out) allocator for temporary scopes, faster and lighter than nested arenas.
+    - **`Slab` Allocator:** A fixed-size block pool, ideal for reducing fragmentation when allocating many identical objects.
+- [ ] **Benchmark Suite:** A comprehensive set of automated benchmarks to verify performance claims against `malloc` and other allocators across different architectures.
+- [ ] **Statistics & Telemetry:** Optional, configurable collection of runtime metrics (total allocated bytes, high water mark/peak usage, fragmentation index) to aid in profiling.
+- [ ] **`Queue` Sub-Allocator:** A specialized FIFO (First-In-First-Out) allocator implementation (Ring Buffer strategy).
 
 ## Build Status & Verified Platforms
 
@@ -260,13 +358,13 @@ The library is continuously integrated and tested across a matrix of OSs and Arc
 | MSVC        | ![MSVC Status](https://img.shields.io/github/actions/workflow/status/EasyMem/easy_memory/ci.yml?job=windows-latest%20%7C%20x86_64%20%7C%20gcc&label=msvc&logo=visualstudio&logoColor=white)     |
 
 ### By Architecture
-| Architecture | Endianness | Status |
-| :--- | :--- | :--- |
-| `x86_64` | Little | ![x86_64 Status](https://img.shields.io/github/actions/workflow/status/EasyMem/easy_memory/ci.yml?branch=main&job=build-and-test-x86_64&label=x86_64&logo=intel&logoColor=white) |
-| `x86_32` | Little | ![x86_32 Status](https://img.shields.io/github/actions/workflow/status/EasyMem/easy_memory/ci.yml?branch=main&job=build-and-test-32bit&label=x86_32&logo=intel&logoColor=white) |
-| `AArch64` | Little | ![ARM64 Modern Status](https://img.shields.io/github/actions/workflow/status/EasyMem/easy_memory/ci.yml?branch=main&job=build-and-test-arm64-modern&label=aarch64&logo=arm&logoColor=white) |
-| `ARMv7`  | Little     | ![ARM32 Status](https://img.shields.io/github/actions/workflow/status/EasyMem/easy_memory/ci.yml?job=Ubuntu%20%7C%20ARM32%20(armv7)%20%7C%20GCC&label=armv7&logo=arm&logoColor=white)                                        |
-| `s390x` | **Big** | ![Big Endian Status](https://img.shields.io/github/actions/workflow/status/EasyMem/easy_memory/ci.yml?branch=main&job=build-and-test-big-endian&label=s390x&logo=ibm&logoColor=white) |
+| Architecture | Endianness | OS / Environment | Status |
+| :--- | :--- | :--- | :--- |
+| `x86_64`  | Little  | Windows / Linux / macOS | ![x86_64 Status](https://img.shields.io/github/actions/workflow/status/EasyMem/easy_memory/ci.yml?branch=main&job=build-and-test-x86_64&label=x86_64&logo=intel&logoColor=white) |
+| `x86_32`  | Little  | Windows / Linux | ![x86_32 Status](https://img.shields.io/github/actions/workflow/status/EasyMem/easy_memory/ci.yml?branch=main&job=build-and-test-32bit&label=x86_32&logo=intel&logoColor=white) |
+| `AArch64` | Little  | Linux (Modern & Strict)  | ![ARM64 Modern Status](https://img.shields.io/github/actions/workflow/status/EasyMem/easy_memory/ci.yml?branch=main&job=build-and-test-arm64-modern&label=aarch64&logo=arm&logoColor=white) |
+| `ARMv7`   | Little  | Linux | ![ARM32 Status](https://img.shields.io/github/actions/workflow/status/EasyMem/easy_memory/ci.yml?job=Ubuntu%20%7C%20ARM32%20(armv7)%20%7C%20GCC&label=armv7&logo=arm&logoColor=white) |
+| `s390x`   | **Big** | Linux | ![Big Endian Status](https://img.shields.io/github/actions/workflow/status/EasyMem/easy_memory/ci.yml?branch=main&job=build-and-test-big-endian&label=s390x&logo=ibm&logoColor=white) |
 
 ### C Standards Compliance
 | Standard | Status |
@@ -284,6 +382,14 @@ This library has been verified to run correctly on embedded hardware without sta
 
 ## Why All This?
 *idk, i was bored*
+
+## Contributing
+
+Contributions are welcome! Whether it's a bug fix, a new feature, or an improvement to the documentation, your input is valued. 
+
+If you find an edge case on a specific architecture or want to improve the test coverage, feel free to open an issue or submit a Pull Request.
+
+**Memory management in C doesn't have to be hard. Let's make it *easy*, together.**
 
 ## License
 MIT License. See [LICENSE](LICENSE) for details.
