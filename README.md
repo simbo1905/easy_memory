@@ -185,7 +185,7 @@ Basic allocation, zero-initialization, and fast resetting.
 EM *em = em_create(1024 * 1024);
 
 // Standard allocation
-MyObject *obj = (MyObject *)em_alloc(em, sizeof(MyObject))
+MyObject *obj = (MyObject *)em_alloc(em, sizeof(MyObject));
 
 // Zero-initialized allocation (like calloc)
 Point *pts = (Point *)em_calloc(em, 10, sizeof(Point));
@@ -382,6 +382,17 @@ This library has been verified to run correctly on embedded hardware without sta
 
 ## Why All This?
 *idk, i was bored*
+
+## Official Badges
+
+Show support by adding the EasyMem badge to your project's README.
+
+Preview | Markdown (Copy & Paste) |
+| :--- | :--- |
+| [![EasyMem](https://img.shields.io/badge/EasyMem-easy__memory-27272d?style=flat&logo=github&logoColor=white)](https://github.com/EasyMem/easy_memory) | `[![EasyMem](https://img.shields.io/badge/EasyMem-easy__memory-27272d?style=flat&logo=github&logoColor=white)](https://github.com/EasyMem/easy_memory)` |
+| [![Powered by easy_memory](https://img.shields.io/badge/Powered_by-easy__memory-27272d?style=flat&logo=github&logoColor=white)](https://github.com/EasyMem/easy_memory) | `[![Powered by easy_memory](https://img.shields.io/badge/Powered_by-easy__memory-27272d?style=flat&logo=github&logoColor=white)](https://github.com/EasyMem/easy_memory)` |
+| [![EasyMem](https://img.shields.io/badge/EasyMem-easy__memory-27272d?style=flat-square&logo=github&logoColor=white)](https://github.com/EasyMem/easy_memory) | `[![EasyMem](https://img.shields.io/badge/EasyMem-easy__memory-27272d?style=flat-square&logo=github&logoColor=white)](https://github.com/EasyMem/easy_memory)` |
+| [![Powered by easy_memory](https://img.shields.io/badge/Powered_by-easy__memory-27272d?style=flat-square&logo=github&logoColor=white)](https://github.com/EasyMem/easy_memory) | `[![Powered by easy_memory](https://img.shields.io/badge/Powered_by-easy__memory-27272d?style=flat-square&logo=github&logoColor=white)](https://github.com/EasyMem/easy_memory)` |
 
 ## Contributing
 
